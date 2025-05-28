@@ -1,0 +1,224 @@
+#!/bin/bash
+
+# This file contains functions shared across all Wiggly STT scripts
+# Source this file to access common functionality
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m'  # No Color
+
+# Function to print colored output (shared across all scripts)
+print_status() { echo -e "${BLUE}[INFO]${NC} $1"; }
+print_success() { echo -e "${GREEN}[OK]${NC} $1"; }
+print_warning() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+# Function to check if server is running
+is_server_running() {
+    if [ -f "$SERVER_PID_FILE" ]; then
+        local pid=$(cat "$SERVER_PID_FILE")
+        if kill -0 "$pid" 2>/dev/null; then
+            return 0  # Running
+        else
+            # Stale PID file
+            rm -f "$SERVER_PID_FILE"
+            return 1  # Not running
+        fi
+    fi
+    return 1  # Not running
+}
+
+# Function to check if recording is active
+is_recording_active() {
+    if [ -f "$PID_FILE" ]; then
+        local pid=$(cat "$PID_FILE")
+        if kill -0 "$pid" 2>/dev/null; then
+            return 0  # Recording
+        else
+            # Stale PID file
+            rm -f "$PID_FILE"
+            return 1  # Not recording
+        fi
+    fi
+    return 1  # Not recording
+}
+
+# Function to transcribe using server
+transcribe_via_server() {
+    local audio_file="$1"
+    
+    # Use curl to send audio to server
+    local transcription
+    transcription=$(curl -s -X POST \
+        -F "file=@$audio_file" \
+        -F "response_format=text" \
+        "http://localhost:$SERVER_PORT/inference" 2>/dev/null | \
+        sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+    
+    if [ $? -eq 0 ] && [ -n "$transcription" ]; then
+        echo "$transcription"
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Function to transcribe using CLI
+transcribe_via_cli() {
+    local audio_file="$1"
+    
+    local transcription
+    transcription=$(whisper-cli \
+        -m "$MODEL_PATH/$DEFAULT_MODEL" \
+        -f "$audio_file" \
+        --no-timestamps \
+        --no-prints \
+        2>/dev/null | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+    
+    if [ -n "$transcription" ]; then
+        echo "$transcription"
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Function to check dependencies
+check_dependencies() {
+    local missing_deps=()
+    
+    # Check for audio recording tools
+    if ! command -v ffmpeg >/dev/null 2>&1; then
+        missing_deps+=("ffmpeg")
+    fi
+    
+    # Check for whisper.cpp
+    if ! command -v whisper-cli >/dev/null 2>&1 && ! command -v whisper >/dev/null 2>&1 && ! command -v main >/dev/null 2>&1; then
+        missing_deps+=("whisper.cpp (whisper-cli, whisper or main executable)")
+    fi
+    
+    # Check for whisper-server
+    if ! command -v whisper-server >/dev/null 2>&1; then
+        missing_deps+=("whisper-server")
+    fi
+    
+    # Check for Wayland clipboard
+    if ! command -v wl-copy >/dev/null 2>&1; then
+        missing_deps+=("wl-clipboard")
+    fi
+    
+    # Check for curl (for server communication)
+    if ! command -v curl >/dev/null 2>&1; then
+        missing_deps+=("curl")
+    fi
+    
+    # Check for ydotool if auto-paste is enabled
+    if [ "$AUTO_PASTE_FLAG" = true ] && ! command -v ydotool >/dev/null 2>&1; then
+        print_warning "Auto-paste requested but ydotool not found. Install with: sudo pacman -S ydotool"
+        print_warning "Auto-paste will be skipped"
+    fi
+    
+    if [ ${#missing_deps[@]} -ne 0 ]; then
+        print_error "Missing dependencies:"
+        for dep in "${missing_deps[@]}"; do
+            echo "  - $dep"
+        done
+        echo
+        echo "Install them with:"
+        echo "  sudo pacman -S alsa-utils ffmpeg wl-clipboard curl"
+        echo "  # For whisper.cpp, see: https://github.com/ggerganov/whisper.cpp"
+        exit 1
+    fi
+}
+
+# Function to setup model
+setup_model() {
+    local model_file="$MODEL_PATH/$DEFAULT_MODEL"
+    
+    if [ ! -f "$model_file" ]; then
+        print_warning "Model $DEFAULT_MODEL not found at $model_file"
+        print_status "Creating model directory..."
+        mkdir -p "$MODEL_PATH"
+        
+        print_status "Downloading $DEFAULT_MODEL model..."
+        cd "$MODEL_PATH"
+        wget -q --show-progress "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$DEFAULT_MODEL"
+        cd - >/dev/null
+        
+        if [ -f "$model_file" ]; then
+            print_success "Model downloaded successfully"
+        else
+            print_error "Failed to download model"
+            exit 1
+        fi
+    fi
+}
+
+# Function to setup daemon directory
+setup_daemon_dir() {
+    mkdir -p "$DAEMON_DIR"
+    if [ ! -d "$DAEMON_DIR" ]; then
+        print_error "Cannot create daemon directory: $DAEMON_DIR"
+        exit 1
+    fi
+}
+
+# Function to send notification with optional replacement
+send_notification() {
+    local title="$1"
+    local message="$2"
+    local icon="${3:-audio-input-microphone}"
+    local urgency="${4:-normal}"
+    local expire_time="${5:-5000}"
+    local replace_id="${6:-}"
+    
+    local cmd="notify-send"
+    cmd="$cmd --urgency=$urgency"
+    cmd="$cmd --expire-time=$expire_time"
+    cmd="$cmd --icon=$icon"
+    
+    if [ -n "$replace_id" ]; then
+        cmd="$cmd --replace-id=$replace_id"
+        # Don't print ID when replacing
+        cmd="$cmd \"$title\" \"$message\""
+        eval "$cmd" 2>/dev/null || true
+    else
+        # Print ID when creating new notification
+        cmd="$cmd --print-id"
+        cmd="$cmd \"$title\" \"$message\""
+        eval "$cmd" 2>/dev/null || echo ""
+    fi
+}
+
+# Function to send notification and store ID for replacement
+send_notification_with_id() {
+    local id_var="$1"
+    local title="$2"
+    local message="$3"
+    local icon="${4:-audio-input-microphone}"
+    local urgency="${5:-normal}"
+    local expire_time="${6:-5000}"
+    local replace_id="${7:-}"
+    
+    local notification_id
+    notification_id=$(send_notification "$title" "$message" "$icon" "$urgency" "$expire_time" "$replace_id")
+    
+    # Store the ID in the specified variable (suppress any output)
+    eval "$id_var=\"$notification_id\"" >/dev/null 2>&1
+}
+
+# Function to replace an existing notification
+replace_notification() {
+    local replace_id="$1"
+    local title="$2"
+    local message="$3"
+    local icon="${4:-audio-input-microphone}"
+    local urgency="${5:-normal}"
+    local expire_time="${6:-5000}"
+    
+    send_notification "$title" "$message" "$icon" "$urgency" "$expire_time" "$replace_id"
+} 
