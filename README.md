@@ -12,7 +12,7 @@ Optionally you can also run the server to keep the model in memory for faster tr
 
 That's all. 
 
-P.S. Inference is done locally, data never leaves your machine.
+**P.S.** Inference is done locally, data never leaves your machine.
 
 ## Commands
 
@@ -54,21 +54,69 @@ P.S. Inference is done locally, data never leaves your machine.
 ### Optional
 - **ydotool** - Auto-paste functionality (requires setup)
 
-### Installation
+## Installation
 
-Install whisper.cpp (preferrably optimized for your video card/cpu/npu)
-from [Source](https://github.com/ggml-org/whisper.cpp) or a package.
+### Install Dependencies
 
-#### Install Other Dependencies
+#### Install whisper.cpp
+Install whisper.cpp (preferably a version optimized for your video card/CPU/NPU) from [Source](https://github.com/ggml-org/whisper.cpp) or a package.
+
+#### Install System Dependencies
 ```bash
-# Install system dependencies
+# Arch Linux / Manjaro
 sudo pacman -S ffmpeg wl-clipboard libnotify wget curl
 
-# Install ydotool for auto-paste (optional)
+# Ubuntu / Debian
+sudo apt install ffmpeg wl-clipboard libnotify-bin wget curl
+
+# Fedora
+sudo dnf install ffmpeg wl-clipboard libnotify wget curl
+```
+
+#### Install Optional Dependencies
+```bash
+# For auto-paste functionality
+# Arch Linux / Manjaro
 sudo pacman -S ydotool
+
+# Ubuntu / Debian
+sudo apt install ydotool
+
+# Fedora
+sudo dnf install ydotool
+
+# Enable ydotool service
 systemctl --user enable --now ydotool
+```
 
+### Install Wiggly STT
 
+#### Quick Install (Recommended)
+```bash
+# Clone the repository
+git clone https://github.com/hansp27/wiggly-stt.git
+cd wiggly-stt
+
+# Make install script executable
+chmod u+x install.sh
+
+# Run the install script
+./install.sh --user  # Install for current user
+# or
+./install.sh --system  # Install system-wide (requires sudo)
+```
+
+#### Manual Installation
+```bash
+# Clone the repository
+git clone https://github.com/hansp27/wiggly-stt.git
+cd wiggly-stt
+
+# Make scripts executable
+chmod +x wiggly-stt.sh wiggly-stt-daemon
+
+# Optionally create symlinks or add to PATH
+ln -s "$(pwd)/wiggly-stt.sh" ~/.local/bin/wiggly-stt
 ```
 
 <details>
