@@ -133,6 +133,18 @@ check_dependencies() {
         echo "  # For whisper.cpp, see: https://github.com/ggerganov/whisper.cpp"
         exit 1
     fi
+    
+    # Check platform acceleration support
+    echo
+    print_status "Checking platform optimization support..."
+    if ! detect_platform_acceleration_quiet; then
+        echo
+        print_warning "Performance may be suboptimal due to missing optimizations"
+        print_status "Transcription will work but may be slower than optimal"
+        print_status "See warnings above for optimization suggestions"
+    else
+        print_success "Platform appears well-optimized for whisper.cpp"
+    fi
 }
 
 # Function to setup model
@@ -221,4 +233,337 @@ replace_notification() {
     local expire_time="${6:-5000}"
     
     send_notification "$title" "$message" "$icon" "$urgency" "$expire_time" "$replace_id"
+}
+
+# Function to detect platform acceleration (quiet version for startup)
+detect_platform_acceleration_quiet() {
+    local warnings=()
+    local recommendations=()
+    local available_optimizations=()
+    
+    # Check for NVIDIA GPU and CUDA
+    if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
+        local gpu_count=$(nvidia-smi -L 2>/dev/null | wc -l)
+        if [ $gpu_count -gt 0 ]; then
+            # Check if CUDA is available and whisper.cpp is built with CUDA
+            if [ -d "/opt/cuda" ] || [ -d "/usr/local/cuda" ]; then
+                if ldd $(which whisper-cli) 2>/dev/null | grep -q "cuda"; then
+                    available_optimizations+=("NVIDIA GPU + CUDA")
+                else
+                    warnings+=("NVIDIA GPU available but whisper.cpp not built with CUDA")
+                    recommendations+=("Install whisper.cpp-cuda package")
+                fi
+            else
+                warnings+=("NVIDIA GPU detected but CUDA runtime not found")
+                recommendations+=("Install CUDA: sudo pacman -S cuda")
+            fi
+        fi
+    fi
+    
+    # Check for Vulkan support (cross-vendor GPU acceleration)
+    if command -v vulkaninfo >/dev/null 2>&1; then
+        if vulkaninfo --summary 2>/dev/null | grep -q "Device Name"; then
+            if ldd $(which whisper-cli) 2>/dev/null | grep -q "vulkan"; then
+                available_optimizations+=("Vulkan GPU acceleration")
+            else
+                warnings+=("Vulkan GPU available but not used by whisper.cpp")
+                recommendations+=("Rebuild whisper.cpp with -DGGML_VULKAN=1")
+            fi
+        fi
+    fi
+    
+    # Check for BLAS support (CPU optimization)
+    if ldconfig -p 2>/dev/null | grep -q "libblas\|libopenblas\|libmkl"; then
+        if ldd $(which whisper-cli) 2>/dev/null | grep -q "blas"; then
+            available_optimizations+=("BLAS CPU optimization")
+        else
+            warnings+=("BLAS library available but not used")
+            recommendations+=("Rebuild whisper.cpp with -DGGML_BLAS=1")
+        fi
+    else
+        warnings+=("No BLAS library found")
+        recommendations+=("Install OpenBLAS: sudo pacman -S openblas")
+    fi
+    
+    # Check CPU features
+    if [ -f "/proc/cpuinfo" ]; then
+        local cpu_flags=$(grep "^flags" /proc/cpuinfo | head -1)
+        
+        if echo "$cpu_flags" | grep -q "avx2"; then
+            available_optimizations+=("CPU AVX2 support")
+        else
+            warnings+=("CPU missing AVX2 support")
+        fi
+    fi
+    
+    # Display results in compact format
+    if [ ${#available_optimizations[@]} -gt 0 ]; then
+        print_status "Available optimizations: $(IFS=', '; echo "${available_optimizations[*]}")"
+    fi
+    
+    if [ ${#warnings[@]} -gt 0 ]; then
+        print_warning "Missing optimizations:"
+        for warning in "${warnings[@]}"; do
+            echo "  • $warning"
+        done
+        
+        if [ ${#recommendations[@]} -gt 0 ]; then
+            print_status "Suggestions:"
+            for rec in "${recommendations[@]}"; do
+                echo "  - $rec"
+            done
+        fi
+        
+        return 1  # Indicate optimizations are missing
+    else
+        return 0  # Good optimization level
+    fi
+}
+
+# Function to detect available platform acceleration options (detailed version)
+detect_platform_acceleration() {
+    local warnings=()
+    local recommendations=()
+    local available_optimizations=()
+    
+    print_status "Checking platform acceleration support..."
+    
+    # Check for NVIDIA GPU and CUDA
+    if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
+        local gpu_count=$(nvidia-smi -L 2>/dev/null | wc -l)
+        if [ $gpu_count -gt 0 ]; then
+            print_success "NVIDIA GPU detected ($gpu_count device(s))"
+            
+            # Check if CUDA is available
+            if [ -d "/opt/cuda" ] || [ -d "/usr/local/cuda" ]; then
+                available_optimizations+=("CUDA runtime available")
+                
+                # Check if whisper.cpp is built with CUDA support
+                if ldd $(which whisper-cli) 2>/dev/null | grep -q "cuda"; then
+                    available_optimizations+=("whisper.cpp built with CUDA")
+                else
+                    warnings+=("whisper.cpp not built with CUDA support")
+                    recommendations+=("Install whisper.cpp-cuda package or rebuild with -DGGML_CUDA=1")
+                fi
+            else
+                warnings+=("CUDA runtime not found despite having NVIDIA GPU")
+                recommendations+=("Install CUDA toolkit: sudo pacman -S cuda")
+            fi
+        fi
+    else
+        print_status "No NVIDIA GPU detected"
+    fi
+    
+    # Check for Vulkan support (cross-vendor GPU acceleration)
+    if command -v vulkaninfo >/dev/null 2>&1; then
+        if vulkaninfo --summary 2>/dev/null | grep -q "Device Name"; then
+            available_optimizations+=("Vulkan-compatible GPU available")
+            
+            # Check if whisper.cpp is built with Vulkan support
+            if ldd $(which whisper-cli) 2>/dev/null | grep -q "vulkan"; then
+                available_optimizations+=("whisper.cpp built with Vulkan")
+            else
+                warnings+=("Vulkan GPU available but whisper.cpp not built with Vulkan support")
+                recommendations+=("Rebuild whisper.cpp with -DGGML_VULKAN=1 for GPU acceleration")
+            fi
+        fi
+    else
+        print_status "Vulkan tools not available (install vulkan-tools to check GPU support)"
+    fi
+    
+    # Check for Intel GPU / OpenVINO support
+    if lspci 2>/dev/null | grep -i "intel.*graphics" >/dev/null; then
+        available_optimizations+=("Intel GPU detected")
+        
+        # Check if OpenVINO is available
+        if command -v benchmark_app >/dev/null 2>&1 || [ -d "/opt/intel/openvino" ]; then
+            available_optimizations+=("OpenVINO potentially available")
+        else
+            warnings+=("Intel GPU detected but OpenVINO not available")
+            recommendations+=("Install OpenVINO for Intel GPU acceleration")
+        fi
+    fi
+    
+    # Check for BLAS support (CPU optimization)
+    print_status "Checking CPU optimizations..."
+    
+    if ldconfig -p 2>/dev/null | grep -q "libblas\|libopenblas\|libmkl"; then
+        available_optimizations+=("BLAS library available")
+        
+        # Check if whisper.cpp is built with BLAS
+        if ldd $(which whisper-cli) 2>/dev/null | grep -q "blas"; then
+            available_optimizations+=("whisper.cpp built with BLAS")
+        else
+            warnings+=("BLAS available but whisper.cpp not using it")
+            recommendations+=("Rebuild whisper.cpp with -DGGML_BLAS=1 for better CPU performance")
+        fi
+    else
+        warnings+=("No BLAS library found")
+        recommendations+=("Install OpenBLAS: sudo pacman -S openblas")
+        recommendations+=("Rebuild whisper.cpp with -DGGML_BLAS=1")
+    fi
+    
+    # Check CPU features
+    if [ -f "/proc/cpuinfo" ]; then
+        local cpu_flags=$(grep "^flags" /proc/cpuinfo | head -1)
+        
+        if ! echo "$cpu_flags" | grep -q "avx2"; then
+            warnings+=("CPU missing AVX2 support")
+        else
+            available_optimizations+=("CPU supports AVX2")
+        fi
+        
+        if ! echo "$cpu_flags" | grep -q "avx"; then
+            warnings+=("CPU missing AVX support")
+        else
+            available_optimizations+=("CPU supports AVX")
+        fi
+        
+        if ! echo "$cpu_flags" | grep -q "fma"; then
+            warnings+=("CPU missing FMA support")
+        else
+            available_optimizations+=("CPU supports FMA")
+        fi
+    fi
+    
+    # Check for Apple Silicon (if running on macOS/ARM)
+    if uname -m | grep -q "arm64\|aarch64"; then
+        print_status "ARM64 architecture detected"
+        if uname -s | grep -q "Darwin"; then
+            available_optimizations+=("Apple Silicon detected - Metal acceleration possible")
+            # Note: This script is for Linux/Wayland, but good to detect
+        else
+            available_optimizations+=("ARM64 architecture - NEON optimizations possible")
+        fi
+    fi
+    
+    # Display results
+    echo
+    print_status "=== Platform Acceleration Report ==="
+    
+    if [ ${#available_optimizations[@]} -gt 0 ]; then
+        print_success "Available optimizations:"
+        for opt in "${available_optimizations[@]}"; do
+            echo "  ✓ $opt"
+        done
+    fi
+    
+    if [ ${#warnings[@]} -gt 0 ]; then
+        echo
+        print_warning "Performance warnings:"
+        for warning in "${warnings[@]}"; do
+            echo "  ⚠ $warning"
+        done
+        
+        echo
+        print_status "Recommendations for better performance:"
+        for rec in "${recommendations[@]}"; do
+            echo "  • $rec"
+        done
+        
+        echo
+        print_status "Current performance: CPU-only inference (slower)"
+        print_status "Expected transcription time: 3-10x audio duration"
+        
+        return 1  # Indicate optimizations are missing
+    else
+        echo
+        print_success "Platform is well-optimized for whisper.cpp!"
+        return 0  # Good optimization level
+    fi
+}
+
+# Function to check acceleration during runtime and warn user
+check_runtime_acceleration() {
+    local log_file="$1"
+    local notification_id="$2"
+    
+    # Wait a moment for the log to be written
+    sleep 2
+    
+    if [ -f "$log_file" ]; then
+        local gpu_acceleration_available=false
+        local optimization_warnings=()
+        
+        # Check for CUDA initialization failure
+        if grep -q "failed to initialize CUDA" "$log_file" 2>/dev/null; then
+            optimization_warnings+=("CUDA acceleration failed")
+        fi
+        
+        # Check for successful GPU acceleration backends
+        if grep -q "CUDA.*ARCHS.*=" "$log_file" 2>/dev/null && ! grep -q "failed to initialize CUDA" "$log_file" 2>/dev/null; then
+            gpu_acceleration_available=true
+            print_success "CUDA acceleration active - optimal performance"
+        elif grep -q "METAL = 1" "$log_file" 2>/dev/null; then
+            gpu_acceleration_available=true
+            print_success "Metal acceleration active - optimal performance"
+        elif grep -q "OPENCL = 1" "$log_file" 2>/dev/null; then
+            gpu_acceleration_available=true
+            print_success "OpenCL acceleration active - good performance"
+        elif grep -q "VULKAN = 1" "$log_file" 2>/dev/null; then
+            gpu_acceleration_available=true
+            print_success "Vulkan acceleration active - good performance"
+        elif grep -q "OPENVINO = 1" "$log_file" 2>/dev/null; then
+            gpu_acceleration_available=true
+            print_success "OpenVINO acceleration active - good performance"
+        fi
+        
+        # Check for CPU fallback messages
+        if grep -q "no GPU found" "$log_file" 2>/dev/null; then
+            optimization_warnings+=("No GPU detected")
+        fi
+        
+        # Parse system_info line if available
+        if grep -q "system_info:" "$log_file" 2>/dev/null; then
+            local system_info_line=$(grep "system_info:" "$log_file" 2>/dev/null)
+            
+            # Check CPU optimizations
+            if [[ "$system_info_line" =~ BLAS.*=.*0 ]] || ! [[ "$system_info_line" =~ BLAS ]]; then
+                optimization_warnings+=("BLAS not active")
+            fi
+            if [[ "$system_info_line" =~ AVX2.*=.*0 ]] || ! [[ "$system_info_line" =~ AVX2 ]]; then
+                optimization_warnings+=("AVX2 not active")
+            fi
+            if [[ "$system_info_line" =~ OPENMP.*=.*1 ]]; then
+                print_success "OpenMP threading active"
+            fi
+        fi
+        
+        # Report findings
+        if [ ${#optimization_warnings[@]} -gt 0 ] && [ "$gpu_acceleration_available" = false ]; then
+            print_warning "Using CPU-only inference - performance will be suboptimal"
+            
+            if [ ${#optimization_warnings[@]} -eq 1 ]; then
+                print_warning "Issue: ${optimization_warnings[0]}"
+            else
+                print_warning "Issues: $(IFS=', '; echo "${optimization_warnings[*]}")"
+            fi
+            
+            print_status "Run './wiggly-stt.sh check-acceleration' for optimization suggestions"
+            
+            # Send warning notification if notification ID provided
+            if [ -n "$notification_id" ]; then
+                local warning_msg="Using CPU inference (slower than optimal)"
+                if [ ${#optimization_warnings[@]} -gt 1 ]; then
+                    warning_msg="$warning_msg\nIssues: $(IFS=', '; echo "${optimization_warnings[*]}")"
+                else
+                    warning_msg="$warning_msg\nIssue: ${optimization_warnings[0]}"
+                fi
+                
+                replace_notification "$notification_id" "⚠️ Wiggly STT Performance" \
+                    "$warning_msg\nServer ready but performance suboptimal" \
+                    "dialog-warning" "normal" "8000"
+            fi
+            
+            return 1  # Performance issues detected
+        fi
+        
+        # If we have good optimizations
+        if [ "$gpu_acceleration_available" = true ] || grep -q "BLAS.*=.*1\|OPENMP.*=.*1" "$log_file" 2>/dev/null; then
+            print_success "Good acceleration detected - performance should be optimal"
+            return 0
+        fi
+    fi
+    
+    return 0  # No issues detected or log not available
 } 

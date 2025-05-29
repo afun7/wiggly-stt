@@ -190,9 +190,15 @@ start_server() {
         print_success "Server started successfully on $SERVER_HOST:$SERVER_PORT"
         print_status "Log file: $SERVER_LOG_FILE"
         
-        # Replace the initial notification with completion notification
-        replace_notification "$server_notification_id" "🎤 Wiggly STT Server" "Server ready on port $SERVER_PORT\nReady for fast transcription!" \
-            "audio-input-microphone" "normal" "4000"
+        # Check for acceleration issues and warn user
+        if ! check_runtime_acceleration "$SERVER_LOG_FILE" "$server_notification_id"; then
+            # Performance warnings were issued, but server is functional
+            print_status "Server is functional but performance may be suboptimal"
+        else
+            # Replace the initial notification with completion notification
+            replace_notification "$server_notification_id" "🎤 Wiggly STT Server" "Server ready on port $SERVER_PORT\nReady for fast transcription!" \
+                "audio-input-microphone" "normal" "4000"
+        fi
     else
         print_error "Failed to start server - check log file: $SERVER_LOG_FILE"
         
