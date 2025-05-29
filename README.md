@@ -1,4 +1,7 @@
 # wiggly-stt 
+<div align="center">
+  <img src="icon.png" width="128" height="128" alt="Wiggly STT Icon">
+</div>
 
 A simple to use script created for one purpose: simply transcribe audio to text in linux and have it work with wayland/gui apps. 
 
