@@ -567,3 +567,37 @@ check_runtime_acceleration() {
     
     return 0  # No issues detected or log not available
 } 
+
+# Function to check if audio file is not mute (contains speech)
+is_audio_not_mute() {
+    local audio_file="$1"
+    if ! command -v ffmpeg >/dev/null 2>&1; then
+        print_warning "ffmpeg not found, cannot check for mute audio. Assuming not mute."
+        return 0
+    fi
+    # Use ffmpeg silencedetect to check for non-silent audio
+    local silence_info
+    silence_info=$(ffmpeg -i "$audio_file" -af silencedetect=noise=-30dB:d=0.5 -f null - 2>&1)
+    # Get file duration
+    local duration
+    duration=$(echo "$silence_info" | grep 'Duration:' | awk '{print $2}' | tr -d ,)
+    # Convert duration to seconds (supports mm:ss.ss or hh:mm:ss.ss)
+    duration_sec=$(echo "$duration" | awk -F: '{ if (NF==3) { print ($1*3600)+($2*60)+$3 } else if (NF==2) { print ($1*60)+$2 } else { print $1 } }')
+    # Find all silence_start and silence_end
+    local silence_starts silence_ends
+    silence_starts=($(echo "$silence_info" | grep -o 'silence_start: [0-9.]*' | awk '{print $2}'))
+    silence_ends=($(echo "$silence_info" | grep -o 'silence_end: [0-9.]*' | awk '{print $2}'))
+    # If the only silence_start is 0 and the only silence_end is at duration, it's mute
+    if [ ${#silence_starts[@]} -eq 1 ] && [ ${#silence_ends[@]} -eq 1 ]; then
+        start=${silence_starts[0]}
+        end=${silence_ends[0]}
+        # Allow small rounding error (0.1s)
+        diff=$(echo "$duration_sec - $end" | bc -l)
+        abs_diff=$(echo "if ($diff < 0) -1 * $diff else $diff" | bc)
+        if [ "$start" = "0" ] && ( ((echo "$abs_diff < 0.1" | bc -l) > 0) ); then
+            return 1  # Mute
+        fi
+    fi
+    # If there is any period of non-silence, return 0
+    return 0
+} 
