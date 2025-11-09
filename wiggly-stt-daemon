@@ -392,9 +392,9 @@ Options:
 
 Workflow:
     1. Start daemon: $0 --start
-    2. Speak 
+    2. Speak
     3. Stop when done: $0 --stop [-p]
-    4. After transcription is complete, notification is fired and text is 
+    4. After transcription is complete, notification is fired and text is
        put onto the clipboard; with [-p] it is also pasted.
 
 Examples:
@@ -494,4 +494,3 @@ main() {
 
 # Run main function
 main "$@"
-

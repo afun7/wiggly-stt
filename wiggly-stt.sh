@@ -173,6 +173,7 @@ start_server() {
     # Start server in background
     whisper-server \
         -m "$MODEL_PATH/$DEFAULT_MODEL" \
+        --language $TRANSCRIBE_LANGUAGE \
         --host "$SERVER_HOST" \
         --port "$SERVER_PORT" \
         --no-timestamps \

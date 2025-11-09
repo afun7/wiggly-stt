@@ -74,6 +74,7 @@ transcribe_via_cli() {
     local transcription
     transcription=$(whisper-cli \
         -m "$MODEL_PATH/$DEFAULT_MODEL" \
+        --language $TRANSCRIBE_LANGUAGE \
         -f "$audio_file" \
         --no-timestamps \
         --no-prints \
